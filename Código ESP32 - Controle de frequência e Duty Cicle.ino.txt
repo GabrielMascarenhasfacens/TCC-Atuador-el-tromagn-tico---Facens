@@ -1,0 +1,209 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+#define PINO_LED_VERMELHO 12
+#define PINO_LED_VERDE 13
+
+#define PINO_POT_DUTYCICLE 34
+#define PINO_POT_FREQ 35
+#define PINO_POT_TEMPO 32
+
+#define PINO_SAIDA_PWM1 25
+#define PINO_SAIDA_PWM2 26
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+#define PWM_RESOLUCAO 8 
+
+#define CANAL_PWM1 0     
+#define CANAL_PWM2 1     
+#define CANAL_LED_VERMELHO 2  
+
+int dutyCycle = 0;  
+int frequencia = 1;     
+int configTempo = 0; 
+String modoTempo = "OFF"; 
+
+int ultimaFrequencia = 0; 
+
+unsigned long ultimoTempoTroca = 0;
+bool estadoPwm1Ativo = true; 
+
+unsigned long ultimaAtualizacaoDisplay = 0;
+#define INTERVALO_ATT_DISPLAY 250 
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(PINO_LED_VERMELHO, OUTPUT);
+  pinMode(PINO_LED_VERDE, OUTPUT);
+  
+  pinMode(PINO_POT_DUTYCICLE, INPUT);
+  pinMode(PINO_POT_FREQ, INPUT);
+  pinMode(PINO_POT_TEMPO, INPUT);
+
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+
+  sequenciaBoot();
+  
+  sequenciaCarregando();
+
+  ledcSetup(CANAL_LED_VERMELHO, 5000, PWM_RESOLUCAO);
+  ledcAttachPin(PINO_LED_VERMELHO, CANAL_LED_VERMELHO);
+  
+  ledcSetup(CANAL_PWM1, frequencia, PWM_RESOLUCAO);
+  ledcAttachPin(PINO_SAIDA_PWM1, CANAL_PWM1);
+  
+  ledcSetup(CANAL_PWM2, frequencia, PWM_RESOLUCAO);
+  ledcAttachPin(PINO_SAIDA_PWM2, CANAL_PWM2);
+
+  digitalWrite(PINO_LED_VERDE, HIGH);
+  
+  lcd.clear();
+}
+
+void sequenciaBoot() {
+  digitalWrite(PINO_LED_VERMELHO, LOW);
+  digitalWrite(PINO_LED_VERDE, LOW);
+
+  lcd.clear();
+  lcd.setCursor(2, 0); 
+  lcd.print("TCC Atuador");
+  lcd.setCursor(0, 1); 
+  lcd.print("Eletromag Facens");
+  
+  delay(5000);
+}
+
+void sequenciaCarregando() {
+  lcd.clear();
+  lcd.setCursor(2, 0); 
+  lcd.print("Carregando...");
+
+  byte bloco[8] = { 0b11111, 0b11111, 0b11111, 0b11111, 0b11111, 0b11111, 0b11111, 0b11111 };
+  lcd.createChar(0, bloco);
+
+  int blocosOitentaPorcento = (int)(16 * 0.8); 
+  for (int i = 0; i < blocosOitentaPorcento; i++) {
+    lcd.setCursor(i, 1);
+    lcd.write((byte)0); 
+    
+    digitalWrite(PINO_LED_VERMELHO, HIGH);
+    digitalWrite(PINO_LED_VERDE, HIGH);
+    delay(166); 
+    digitalWrite(PINO_LED_VERMELHO, LOW);
+    digitalWrite(PINO_LED_VERDE, LOW);
+    delay(166);
+  }
+
+  digitalWrite(PINO_LED_VERMELHO, LOW);
+  digitalWrite(PINO_LED_VERDE, HIGH); 
+  delay(2000);
+
+  for (int i = blocosOitentaPorcento; i < 16; i++) {
+    lcd.setCursor(i, 1);
+    lcd.write((byte)0);
+    delay(100); 
+  }
+  
+  delay(500); 
+}
+
+void loop() {
+  lerEntradas();
+  atualizarPWM();
+  atualizarLEDs();
+  atualizarDisplay();
+}
+
+void lerEntradas() {
+  dutyCycle = map(analogRead(PINO_POT_DUTYCICLE), 0, 4095, 0, 100); 
+
+  frequencia = map(analogRead(PINO_POT_FREQ), 0, 4095, 1, 20000);
+
+  int valorPot = analogRead(PINO_POT_TEMPO);
+  
+  if (valorPot < 200) {
+    modoTempo = "OFF";
+    configTempo = 0;
+  } else if (valorPot < 400) {
+    modoTempo = "B1";
+    configTempo = 0;
+  } else if (valorPot < 600) {
+    modoTempo = "B2";
+    configTempo = 0;
+  } else {
+    int passo = map(valorPot, 600, 4095, 0, 15); 
+    configTempo = 50 + (passo * 50);
+    
+    char temp[5]; 
+    sprintf(temp, "%dms", configTempo);
+    modoTempo = String(temp);
+  }
+}
+
+void atualizarPWM() {
+  int valorDuty = map(dutyCycle, 0, 100, 0, 255);
+
+  if (frequencia != ultimaFrequencia) {
+    ledcChangeFrequency(CANAL_PWM1, frequencia, PWM_RESOLUCAO);
+    ledcChangeFrequency(CANAL_PWM2, frequencia, PWM_RESOLUCAO);
+    ultimaFrequencia = frequencia;
+  }
+
+  if (configTempo == 0) { 
+    if (modoTempo == "OFF") {
+      ledcWrite(CANAL_PWM1, valorDuty);
+      ledcWrite(CANAL_PWM2, valorDuty);
+    } else if (modoTempo == "B1") {
+      ledcWrite(CANAL_PWM1, valorDuty);
+      ledcWrite(CANAL_PWM2, 0); 
+    } else if (modoTempo == "B2") {
+      ledcWrite(CANAL_PWM1, 0); 
+      ledcWrite(CANAL_PWM2, valorDuty);
+    }
+  } else {
+    unsigned long tempoAtual = millis();
+    
+    if (tempoAtual - ultimoTempoTroca >= configTempo) {
+      estadoPwm1Ativo = !estadoPwm1Ativo; 
+      ultimoTempoTroca = tempoAtual;
+    }
+
+    if (estadoPwm1Ativo) {
+      ledcWrite(CANAL_PWM1, valorDuty);
+      ledcWrite(CANAL_PWM2, 0);
+    } else {
+      ledcWrite(CANAL_PWM1, 0);
+      ledcWrite(CANAL_PWM2, valorDuty);
+    }
+  }
+}
+
+void atualizarLEDs() {
+  if (dutyCycle == 0) { 
+    ledcWrite(CANAL_LED_VERMELHO, 0); 
+  } else {
+    int brilhoLed = map(dutyCycle, 1, 100, 10, 255); 
+    ledcWrite(CANAL_LED_VERMELHO, brilhoLed);
+  }
+}
+
+void atualizarDisplay() {
+  if (millis() - ultimaAtualizacaoDisplay >= INTERVALO_ATT_DISPLAY) {
+    
+    char linha1[17]; 
+    sprintf(linha1, "D:%3d%%      MODO", dutyCycle);
+    lcd.setCursor(0, 0);
+    lcd.print(linha1);
+    
+    char linha2[17];
+    sprintf(linha2, "F:%5dHz  %-5s", frequencia, modoTempo.c_str());
+    lcd.setCursor(0, 1);
+    lcd.print(linha2);
+    
+    ultimaAtualizacaoDisplay = millis(); 
+  }
+}
