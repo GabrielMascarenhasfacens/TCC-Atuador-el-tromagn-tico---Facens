@@ -10,6 +10,7 @@
 
 #define PINO_SAIDA_PWM1 25
 #define PINO_SAIDA_PWM2 26
+#define PINO_SAIDA_PWM3 27
 
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
@@ -17,9 +18,10 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 #define CANAL_PWM1 0     
 #define CANAL_PWM2 1     
-#define CANAL_LED_VERMELHO 2  
+#define CANAL_PWM3 2
+#define CANAL_LED_VERMELHO 3
 
-int dutyCycle = 0;  
+int dutyCycle = 0;   
 int frequencia = 1;     
 int configTempo = 0; 
 String modoTempo = "OFF"; 
@@ -27,7 +29,7 @@ String modoTempo = "OFF";
 int ultimaFrequencia = 0; 
 
 unsigned long ultimoTempoTroca = 0;
-bool estadoPwm1Ativo = true; 
+int estadoPwmAtivo = 1; 
 
 unsigned long ultimaAtualizacaoDisplay = 0;
 #define INTERVALO_ATT_DISPLAY 250 
@@ -38,7 +40,7 @@ void setup() {
   pinMode(PINO_LED_VERMELHO, OUTPUT);
   pinMode(PINO_LED_VERDE, OUTPUT);
   
-  pinMode(PINO_POT_DUTYCICLE, INPUT);
+  pinMode(PINO_POT_DUTYCICLE, INPUT); 
   pinMode(PINO_POT_FREQ, INPUT);
   pinMode(PINO_POT_TEMPO, INPUT);
 
@@ -58,6 +60,9 @@ void setup() {
   
   ledcSetup(CANAL_PWM2, frequencia, PWM_RESOLUCAO);
   ledcAttachPin(PINO_SAIDA_PWM2, CANAL_PWM2);
+
+  ledcSetup(CANAL_PWM3, frequencia, PWM_RESOLUCAO);
+  ledcAttachPin(PINO_SAIDA_PWM3, CANAL_PWM3);
 
   digitalWrite(PINO_LED_VERDE, HIGH);
   
@@ -125,14 +130,17 @@ void lerEntradas() {
 
   int valorPot = analogRead(PINO_POT_TEMPO);
   
-  if (valorPot < 200) {
+  if (valorPot < 150) {
     modoTempo = "OFF";
     configTempo = 0;
-  } else if (valorPot < 400) {
+  } else if (valorPot < 300) {
     modoTempo = "B1";
     configTempo = 0;
-  } else if (valorPot < 600) {
+  } else if (valorPot < 450) {
     modoTempo = "B2";
+    configTempo = 0;
+  } else if (valorPot < 600) {
+    modoTempo = "B3";
     configTempo = 0;
   } else {
     int passo = map(valorPot, 600, 4095, 0, 15); 
@@ -145,11 +153,12 @@ void lerEntradas() {
 }
 
 void atualizarPWM() {
-  int valorDuty = map(dutyCycle, 0, 100, 0, 255);
+  int valorDuty = map(dutyCycle, 0, 100, 0, 255); 
 
   if (frequencia != ultimaFrequencia) {
     ledcChangeFrequency(CANAL_PWM1, frequencia, PWM_RESOLUCAO);
     ledcChangeFrequency(CANAL_PWM2, frequencia, PWM_RESOLUCAO);
+    ledcChangeFrequency(CANAL_PWM3, frequencia, PWM_RESOLUCAO);
     ultimaFrequencia = frequencia;
   }
 
@@ -157,27 +166,43 @@ void atualizarPWM() {
     if (modoTempo == "OFF") {
       ledcWrite(CANAL_PWM1, valorDuty);
       ledcWrite(CANAL_PWM2, valorDuty);
+      ledcWrite(CANAL_PWM3, valorDuty);
     } else if (modoTempo == "B1") {
       ledcWrite(CANAL_PWM1, valorDuty);
       ledcWrite(CANAL_PWM2, 0); 
+      ledcWrite(CANAL_PWM3, 0);
     } else if (modoTempo == "B2") {
       ledcWrite(CANAL_PWM1, 0); 
       ledcWrite(CANAL_PWM2, valorDuty);
+      ledcWrite(CANAL_PWM3, 0);
+    } else if (modoTempo == "B3") {
+      ledcWrite(CANAL_PWM1, 0); 
+      ledcWrite(CANAL_PWM2, 0);
+      ledcWrite(CANAL_PWM3, valorDuty);
     }
   } else {
     unsigned long tempoAtual = millis();
     
     if (tempoAtual - ultimoTempoTroca >= configTempo) {
-      estadoPwm1Ativo = !estadoPwm1Ativo; 
+      estadoPwmAtivo++;
+      if (estadoPwmAtivo > 3) {
+        estadoPwmAtivo = 1;
+      }
       ultimoTempoTroca = tempoAtual;
     }
 
-    if (estadoPwm1Ativo) {
+    if (estadoPwmAtivo == 1) {
       ledcWrite(CANAL_PWM1, valorDuty);
       ledcWrite(CANAL_PWM2, 0);
-    } else {
+      ledcWrite(CANAL_PWM3, 0);
+    } else if (estadoPwmAtivo == 2) {
       ledcWrite(CANAL_PWM1, 0);
       ledcWrite(CANAL_PWM2, valorDuty);
+      ledcWrite(CANAL_PWM3, 0);
+    } else if (estadoPwmAtivo == 3) {
+      ledcWrite(CANAL_PWM1, 0);
+      ledcWrite(CANAL_PWM2, 0);
+      ledcWrite(CANAL_PWM3, valorDuty);
     }
   }
 }
@@ -195,7 +220,7 @@ void atualizarDisplay() {
   if (millis() - ultimaAtualizacaoDisplay >= INTERVALO_ATT_DISPLAY) {
     
     char linha1[17]; 
-    sprintf(linha1, "D:%3d%%      MODO", dutyCycle);
+    sprintf(linha1, "D:%3d%%      MODO", dutyCycle); 
     lcd.setCursor(0, 0);
     lcd.print(linha1);
     
